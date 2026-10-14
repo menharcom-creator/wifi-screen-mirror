@@ -6,7 +6,7 @@ const PORT = process.env.PORT || 8080;
 const server = http.createServer((req, res) => {
   if (req.url === '/' || req.url.startsWith('/?')) {
     res.writeHead(200, { 'Content-Type': 'text/html' });
-    return fs.createReadStream(path.join(__dirname, 'index.html')).pipe(res);
+    return fs.createReadStream(path.join(__dirname, 'www', 'index.html')).pipe(res);
   }
   res.writeHead(404); res.end();
 });
