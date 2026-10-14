@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>WiFi Screen Mirror</title>
+<style>
+:root{--bg:#0b0d1a;--card:#151933;--tx:#eef0ff;--mut:#9aa0c8;--a:#4f7cff;--b:#8b5cf6;--ok:#34d399;--bad:#f87171}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 20% 0,#1b1f4a,var(--bg) 60%);color:var(--tx);font:18px system-ui,sans-serif;min-height:100vh;padding:env(safe-area-inset-top) 16px 24px}
+.wrap{max-width:560px;margin:0 auto;padding-top:20px}h1{font-size:1.5em;margin:.2em 0}
+.card{background:var(--card);border-radius:20px;padding:20px;margin:14px 0;animation:in .4s}@keyframes in{from{opacity:0;transform:translateY(8px)}}
+button{background:linear-gradient(135deg,var(--a),var(--b));color:#fff;border:0;border-radius:16px;padding:16px 22px;font-size:1em;font-weight:600;width:100%;margin:6px 0;cursor:pointer}
+button.sec{background:#262b57}button:disabled{opacity:.4}button:focus-visible,input:focus-visible{outline:4px solid #fff}
+input{width:100%;font-size:2em;letter-spacing:.3em;text-align:center;padding:14px;border-radius:16px;border:2px solid #333a78;background:#0e1124;color:var(--tx)}
+.st{display:inline-flex;align-items:center;gap:8px;font-weight:600}.dot{width:12px;height:12px;border-radius:50%;background:var(--mut)}
+.Connected .dot{background:var(--ok)}.Error .dot,.Disconnected .dot{background:var(--bad)}.Connecting .dot,.Searching .dot,.Reconnecting .dot{background:#fbbf24;animation:p 1s infinite}@keyframes p{50%{opacity:.3}}
+.mut{color:var(--mut);font-size:.8em}.err{color:var(--bad);min-height:1.2em}.hide{display:none!important}
+video,img{width:100%;border-radius:14px;background:#000;max-height:40vh;object-fit:contain}
+progress{width:100%}.row{display:flex;gap:8px}
+#rx{text-align:center}#code{font-size:5em;font-weight:800;letter-spacing:.15em;background:linear-gradient(135deg,var(--a),var(--b));-webkit-background-clip:text;color:transparent}
+#stage{position:fixed;inset:0;background:#000;display:flex;align-items:center;justify-content:center;z-index:5}
+#stage video,#stage img{max-height:100vh;height:100%;border-radius:0}
+#bar{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);display:flex;gap:8px;z-index:6;transition:opacity .4s}
+#bar button{width:auto;padding:12px 18px}
+@media(min-width:900px) and (orientation:landscape){body{font-size:24px}.wrap{max-width:900px}}
+</style></head><body><div class="wrap">
+<h1>📺 WiFi Screen Mirror</h1>
+
+<div id="home" class="card"><p class="mut">Both devices must be on the same Wi-Fi and open this page from the server address.</p>
+<button id="goTx">📱 iPhone / Sender</button><button id="goRx" class="sec">📺 Android TV / Receiver</button></div>
+
+<!-- RECEIVER -->
+<div id="rx" class="card hide"><div class="mut">Enter this code on your phone</div><div id="code">······</div>
+<div class="st" id="rxSt"><span class="dot"></span><span id="rxStT">Searching</span></div>
+<p class="mut" id="rxInfo"></p><p class="mut">Open <b id="addr"></b> on the phone, choose Sender, enter the code.</p>
+<button id="rxHome" class="sec">Return to home</button></div>
+<div id="stage" class="hide"><video id="rv" autoplay playsinline></video><img id="ri" class="hide"></div>
+<div id="bar" class="hide"><button id="bFs">⛶ Fullscreen</button><button id="bPp">⏯</button><button id="bVm">🔉−</button><button id="bVp">🔊+</button><button id="bDc" class="sec">Disconnect</button></div>
+
+<!-- SENDER -->
+<div id="tx" class="card hide">
+<div class="st" id="txSt"><span class="dot"></span><span id="txStT">Disconnected</span></div>
+<p class="mut" id="txInfo">TV: — · Duration: 00:00</p>
+<input id="pin" inputmode="numeric" maxlength="6" placeholder="000000" aria-label="Pairing code">
+<button id="bCon">Connect</button><button id="bDis" class="sec hide">Disconnect</button>
+<div class="err" id="txErr"></div>
+<details><summary class="mut">Troubleshooting</summary><p class="mut">Same Wi-Fi on both devices · turn off "client/AP isolation" on the router · turn off VPN/Private Relay · use the exact server address · make sure the code is the one on the TV.</p></details>
+</div>
+<div id="tools" class="card hide"><b>Send to TV</b>
+<button id="bScr">🖥 Start Screen Sharing</button><button id="bStop" class="sec hide">Stop sharing</button>
+<p class="mut" id="scrNote"></p>
+<input id="file" type="file" accept="image/*,video/*" class="hide"><button id="bPick" class="sec">🖼 Choose photo / video</button>
+<progress id="prog" value="0" max="1" class="hide"></progress>
+<div class="row hide" id="vc"><button id="sPlay">▶ Play</button><button id="sPause" class="sec">⏸ Pause</button><button id="sStop" class="sec">⏹ Stop</button></div>
+<video id="pv" muted playsinline class="hide"></video></div>
+</div>
+<script>
+const $=id=>document.getElementById(id),show=(e,v=true)=>$(e).classList.toggle('hide',!v);
+const WS=(location.protocol==='https:'?'wss://':'ws://')+location.host;
+const CHUNK=16384;let pc,ws,dc;
+function setSt(p,s){$(p+'St').className='st '+s;$(p+'StT').textContent=s}
+function mkWS(onmsg){return new Promise((res,rej)=>{const w=new WebSocket(WS);const t=setTimeout(()=>{w.close();rej(new Error('Server timeout. Is server.js running and reachable?'))},8000);
+ w.onopen=()=>{clearTimeout(t);res(w)};w.onerror=()=>rej(new Error('Cannot reach signaling server.'));w.onmessage=e=>onmsg(JSON.parse(e.data))})}
+const sig=d=>ws.send(JSON.stringify({t:'sig',data:d}));
+function newPC(){pc=new RTCPeerConnection({iceServers:[]}); // LAN only: host candidates
+ pc.onicecandidate=e=>e.candidate&&sig({ice:e.candidate});return pc}
+$('goTx').onclick=()=>{show('home',0);show('tx')};
+$('goRx').onclick=()=>{show('home',0);show('rx');startRx()};
+$('rxHome').onclick=()=>location.reload();
+
+/* ---------- RECEIVER ---------- */
+let rxFile=null,rxMeta=null,rxBuf=[],rxGot=0,hideT;
+async function startRx(){$('addr').textContent=location.host;setSt('rx','Searching');
+ try{ws=await mkWS(async m=>{
+  if(m.t==='registered')$('code').textContent=m.code,setSt('rx','Searching'),$('rxInfo').textContent='Waiting for a device…';
+  else if(m.t==='peer-joined'){setSt('rx','Connecting');$('rxInfo').textContent=m.name+' is connecting…';newPC();
+   pc.ontrack=e=>{$('rv').srcObject=e.streams[0];showStage('v')};
+   pc.ondatachannel=e=>{e.channel.binaryType='arraybuffer';e.channel.onmessage=rxData;dc=e.channel};
+   pc.onconnectionstatechange=()=>{if(pc.connectionState==='connected'){setSt('rx','Connected');$('rxInfo').textContent='Connected: '+m.name}
+    if(['failed','closed'].includes(pc.connectionState))rxReset()}}
+  else if(m.t==='sig'){if(m.data.sdp){await pc.setRemoteDescription(m.data.sdp);if(m.data.sdp.type==='offer'){await pc.setLocalDescription(await pc.createAnswer());sig({sdp:pc.localDescription})}}
+   else if(m.data.ice)try{await pc.addIceCandidate(m.data.ice)}catch{}}
+  else if(m.t==='peer-left')rxReset()});
+  ws.onclose=()=>{setSt('rx','Disconnected');$('rxInfo').textContent='Server connection lost. Reload to retry.'};
+  ws.send(JSON.stringify({t:'register',name:'Android TV'}))}
+ catch(e){setSt('rx','Error');$('rxInfo').textContent=e.message}}
+function rxReset(){pc&&pc.close();show('stage',0);show('bar',0);show('rx');$('rv').srcObject=null;$('rv').removeAttribute('src');setSt('rx','Searching');$('rxInfo').textContent='Device disconnected. Waiting…'}
+function showStage(k){show('rx',0);show('stage');show('bar');$('rv').classList.toggle('hide',k!=='v');$('ri').classList.toggle('hide',k!=='i');bump();$('bFs').focus()}
+function bump(){$('bar').style.opacity=1;clearTimeout(hideT);hideT=setTimeout(()=>$('bar').style.opacity=.15,5000)}
+['keydown','pointermove'].forEach(e=>document.addEventListener(e,()=>!$('bar').classList.contains('hide')&&bump()));
+function rxData(e){
+ if(typeof e.data==='string'){const m=JSON.parse(e.data);
+  if(m.k==='file'){rxMeta=m;rxBuf=[];rxGot=0}
+  else if(m.k==='end'){const url=URL.createObjectURL(new Blob(rxBuf,{type:rxMeta.type}));
+   if(rxMeta.type.startsWith('image/')){$('rv').pause();$('ri').src=url;showStage('i')}else{$('rv').srcObject=null;$('rv').src=url;$('rv').play().catch(()=>{});showStage('v')}rxBuf=[]}
+  else if(m.k==='play')$('rv').play();else if(m.k==='pause')$('rv').pause();
+  else if(m.k==='stop'){$('rv').pause();$('rv').removeAttribute('src');show('stage',0);show('bar',0);show('rx')}}
+ else{rxBuf.push(e.data);rxGot+=e.data.byteLength}}
+$('bFs').onclick=()=>document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen().catch(()=>{});
+$('bPp').onclick=()=>{const v=$('rv');v.paused?v.play():v.pause()};
+$('bVm').onclick=()=>$('rv').volume=Math.max(0,$('rv').volume-.1);$('bVp').onclick=()=>$('rv').volume=Math.min(1,$('rv').volume+.1);
+$('bDc').onclick=()=>{ws.send(JSON.stringify({t:'leave'}));rxReset()};
+
+/* ---------- SENDER ---------- */
+let t0,tick,tries=0,tvName='—',screenStream,wantConn=false;
+const err=m=>$('txErr').textContent=m||'';
+function dur(){const s=Math.floor((Date.now()-t0)/1000);$('txInfo').textContent=`TV: ${tvName} · Duration: ${String(s/60|0).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`}
+$('bCon').onclick=()=>connect($('pin').value.trim());$('bDis').onclick=()=>disconnect();
+async function connect(code){err();if(!/^\d{6}$/.test(code))return err('Enter the 6-digit code shown on the TV.');
+ wantConn=true;setSt('tx','Connecting');$('bCon').disabled=true;
+ try{ws=await mkWS(async m=>{
+  if(m.t==='error'){wantConn=false;fail(m.msg)}
+  else if(m.t==='joined'){tvName=m.tvName;newPC();dc=pc.createDataChannel('ctl');dc.binaryType='arraybuffer';dc.bufferedAmountLowThreshold=1<<18;
+   pc.onconnectionstatechange=()=>{const s=pc.connectionState;
+    if(s==='connected'){clearTimeout(ct);tries=0;setSt('tx','Connected');t0=Date.now();tick=setInterval(dur,1000);dur();show('bCon',0);show('bDis');show('tools');$('pin').disabled=true}
+    else if(s==='failed'||s==='disconnected')lost()};
+   pc.onnegotiationneeded=async()=>{await pc.setLocalDescription(await pc.createOffer());sig({sdp:pc.localDescription})};
+   ct=setTimeout(()=>pc.connectionState!=='connected'&&lost('Connection timed out. Check troubleshooting tips.'),15000)}
+  else if(m.t==='sig'){if(m.data.sdp)await pc.setRemoteDescription(m.data.sdp);else if(m.data.ice)try{await pc.addIceCandidate(m.data.ice)}catch{}}
+  else if(m.t==='peer-left')lost('TV disconnected.')});
+  ws.onclose=()=>wantConn&&lost();
+  ws.send(JSON.stringify({t:'join',code,name:'iPhone'}));window._code=code}
+ catch(e){fail(e.message)}}
+let ct;
+function fail(msg){clearInterval(tick);setSt('tx','Error');err(msg);$('bCon').disabled=false;show('bCon');show('bDis',0);show('tools',0);$('pin').disabled=false;try{pc&&pc.close();ws&&ws.close()}catch{}}
+function lost(msg){if(!wantConn)return;clearInterval(tick);try{pc&&pc.close();ws&&ws.close()}catch{}
+ if(tries<3){tries++;setSt('tx','Reconnecting');err(msg||`Connection lost. Retry ${tries}/3…`);show('tools',0);setTimeout(()=>wantConn&&connect(window._code),2000)}
+ else{wantConn=false;setSt('tx','Disconnected');fail(msg||'Could not reconnect.');setSt('tx','Disconnected')}}
+function disconnect(){wantConn=false;stopShare();try{ws.send(JSON.stringify({t:'leave'}))}catch{}try{pc.close();ws.close()}catch{}clearInterval(tick);setSt('tx','Disconnected');
+ show('bDis',0);show('bCon');$('bCon').disabled=false;$('pin').disabled=false;show('tools',0);tvName='—';$('txInfo').textContent='TV: — · Duration: 00:00'}
+
+// Screen sharing (not available in iOS Safari — detected honestly)
+const canShare=!!(navigator.mediaDevices&&navigator.mediaDevices.getDisplayMedia);
+if(!canShare){$('bScr').disabled=true;$('scrNote').textContent='This browser (e.g. iPhone Safari) cannot capture the screen. Use photos/videos below, or share from a desktop/Android browser. Full iPhone mirroring needs a native ReplayKit app.'}
+$('bScr').onclick=async()=>{try{screenStream=await navigator.mediaDevices.getDisplayMedia({video:true,audio:true});
+ screenStream.getTracks().forEach(t=>pc.addTrack(t,screenStream));screenStream.getVideoTracks()[0].onended=stopShare;
+ $('pv').srcObject=screenStream;$('pv').play();show('pv');show('bStop');show('bScr',0)}
+ catch(e){err(e.name==='NotAllowedError'?'Screen sharing permission denied.':'Screen sharing failed: '+e.message)}};
+$('bStop').onclick=stopShare;
+function stopShare(){if(!screenStream)return;screenStream.getTracks().forEach(t=>{t.stop();pc.getSenders().filter(s=>s.track===t).forEach(s=>pc.removeTrack(s))});screenStream=null;$('pv').srcObject=null;show('pv',0);show('bStop',0);show('bScr')}
+
+// Media casting over data channel (original quality, with progress)
+$('bPick').onclick=()=>$('file').click();
+$('file').onchange=async e=>{const f=e.target.files[0];if(!f)return;if(!dc||dc.readyState!=='open')return err('Not connected.');
+ show('prog');$('prog').value=0;dc.send(JSON.stringify({k:'file',name:f.name,type:f.type,size:f.size}));
+ for(let o=0;o<f.size;o+=CHUNK){if(dc.readyState!=='open')return err('Transfer interrupted.');
+  if(dc.bufferedAmount>1<<20)await new Promise(r=>dc.onbufferedamountlow=r);
+  dc.send(await f.slice(o,o+CHUNK).arrayBuffer());$('prog').value=o/f.size}
+ dc.send(JSON.stringify({k:'end'}));$('prog').value=1;setTimeout(()=>show('prog',0),800);show('vc',f.type.startsWith('video/'));e.target.value=''};
+[['sPlay','play'],['sPause','pause'],['sStop','stop']].forEach(([id,k])=>$(id).onclick=()=>dc&&dc.readyState==='open'&&dc.send(JSON.stringify({k})));
+const q=new URLSearchParams(location.search);if(q.get('mode')==='rx')$('goRx').click();
+</script></body></html>
